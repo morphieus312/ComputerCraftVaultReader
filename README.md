@@ -18,3 +18,8 @@
       * This is the face where the redstone will be fed to the main computer. I just used a Redstone Link from Create and put it on the back of the computer.
   
   # Images
+![2025-04-10_06 34 30](https://github.com/user-attachments/assets/76e35ae0-0a9c-4076-93b4-f2051a37238f)
+![2025-04-10_06 34 25](https://github.com/user-attachments/assets/8ed586fd-3e4e-423b-b0cc-6cb34316866c)
+![2025-04-10_06 34 24](https://github.com/user-attachments/assets/41305466-0a2b-487f-a866-e6566b46d093)
+![2025-04-10_06 34 19](https://github.com/user-attachments/assets/4d787e00-c9d8-4bd1-9611-962f7ad3a0ad)
+![2025-04-10_06 34 10](https://github.com/user-attachments/assets/cdbceeac-9063-436e-9bc1-90df96b6e9a8)
