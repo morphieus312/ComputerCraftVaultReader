@@ -31,8 +31,8 @@ local output = peripheral.wrap("sophisticatedstorage:barrel_2")
 local DEFAULT_FILE, WEIGHTS_FILE = "default.json", "weights.json"
 local DEFAULT_AFFIX_WEIGHT, unavailableWeight, requiredWeight = 1, 10, 55
 local slot, initializedStates = 1, {}
-local rarityCounts = { SCRAPPY = 0, COMMON = 0, RARE = 0, EPIC = 0, OMEGA = 0, UNKNOWN = 0 }
-local rarities = { "SCRAPPY", "COMMON", "RARE", "EPIC", "OMEGA", "UNKNOWN" }
+local rarityCounts = { SCRAPPY = 0, COMMON = 0, RARE = 0, EPIC = 0, OMEGA = 0, SPECIAL = 0 }
+local rarities = { "SCRAPPY", "COMMON", "RARE", "EPIC", "OMEGA", "SPECIAL" }
 
 -- JSON helpers
 local function loadJSON(filename)
@@ -48,7 +48,12 @@ local function saveJSON(filename, data)
     f.write(textutils.serializeJSON(data))
     f.close()
 end
-
+-- Debug log writer
+local function writeDebugLog(message)
+    local logFile = fs.open("debug_log.txt", "a")
+    logFile.writeLine(message)
+    logFile.close()
+end
 -- Default config loading
 local function loadDefault()
     local default = loadJSON(DEFAULT_FILE)
@@ -95,39 +100,68 @@ local function getMultiplier(val, min, max)
     return (val - min) / (max - min) + 0.5
 end
 
-local function getAffixWeight(affix, type)
-    if reader.getType(affix) == "legendary" then return 1000 end
-    local name = reader.getName(affix)
-    local min = reader.getMinimumRoll(affix)
-    local max = reader.getMaximumRoll(affix)
-    local val = reader.getModifierValue(affix)
+local function getAffixWeight(affix, affixType)
+    -- Legendary shortcut
+    local successType, affixTypeResult = pcall(reader.getType, affix)
+    if successType and affixTypeResult == "legendary" then
+        return 1000, false
+    end
 
-    local baseWeight = Weights[type][name] or unavailableWeight
-    return baseWeight * getMultiplier(val, min, max)
+    -- Safe calls
+    local successName, name = pcall(reader.getName, affix)
+    local successMin, min = pcall(reader.getMinimumRoll, affix)
+    local successMax, max = pcall(reader.getMaximumRoll, affix)
+    local successVal, val = pcall(reader.getModifierValue, affix)
+
+    if not (successName and successMin and successMax and successVal)
+       or type(val) ~= "number"
+       or type(min) ~= "number"
+       or type(max) ~= "number"
+    then
+        writeDebugLog("Special affix detected or failed read: " ..
+            tostring(name) .. " | val=" .. tostring(val) ..
+            ", min=" .. tostring(min) .. ", max=" .. tostring(max))
+        return 0, true
+    end
+
+    local baseWeight = Weights[affixType][name] or unavailableWeight
+    return baseWeight * getMultiplier(val, min, max), false
 end
 
-local function parseAffixes(count, getter, type)
-    local total = 0
+
+
+
+local function parseAffixes(count, getter, affixtype)
+    local total, hasSpecial = 0, false
     for i = 0, count() - 1 do
         local affix = getter(i)
-        total = total + getAffixWeight(affix, type)
+        local weight, special = getAffixWeight(affix, affixtype)
+        total = total + weight
+        if special then hasSpecial = true end
     end
-    return total
+    return total, hasSpecial
 end
+
 
 local function parseRarity()
     return Weights.Rarity[reader.getRarity()] or 0
 end
 
 local function getWeight()
-    return parseRarity()
-        + parseAffixes(reader.getImplicitCount, reader.getImplicit, "Implicit")
-        + parseAffixes(reader.getPrefixCount, reader.getPrefix, "Prefix")
-        + parseAffixes(reader.getSuffixCount, reader.getSuffix, "Suffix")
+    local rarityWeight = parseRarity()
+    local iWeight, iSpecial = parseAffixes(reader.getImplicitCount, reader.getImplicit, "Implicit")
+    local pWeight, pSpecial = parseAffixes(reader.getPrefixCount, reader.getPrefix, "Prefix")
+    local sWeight, sSpecial = parseAffixes(reader.getSuffixCount, reader.getSuffix, "Suffix")
+    
+    local totalSpecial = iSpecial or pSpecial or sSpecial
+    return rarityWeight + iWeight + pWeight + sWeight, totalSpecial
 end
 
+
 local function shouldKeep()
-    return getWeight() > requiredWeight
+    local weight, isSpecial = getWeight()
+    if isSpecial then return true, weight, "SPECIAL" end
+    return weight > requiredWeight, weight, reader.getRarity()
 end
 
 -- Check and add missing affixes
@@ -231,7 +265,7 @@ local rarityColors = {
     RARE = colors.blue,
     EPIC = colors.purple,
     OMEGA = colors.orange,
-    UNKNOWN = colors.black
+    UNKNOWN = colors.magenta
 }
 
 -- Rarity counters
@@ -253,7 +287,7 @@ end
 
 
 function updateRarityCounter(rarity)
-    rarity = rarity or "UNKNOWN"
+    rarity = rarity or "SPECIAL"
     rarityCounts[rarity] = (rarityCounts[rarity] or 0) + 1
     rarityLabels[rarity]:setText(rarity .. ": " .. rarityCounts[rarity])
 end
@@ -271,7 +305,7 @@ end
 local function updateUI(status, weight, rarity)
     statusLabel:setText("Status: " .. status)
     rarityLabel:setText("Rarity: " .. rarity)
-    scoreLabel:setText("Score : " .. string.format("%.1f", weight))
+    scoreLabel:setText("Score : " .. string.format("%.1f", tonumber(weight) or 0))
     minKeepLabel:setText("Min Keep: " .. tostring(requiredWeight))
 end
 
@@ -413,13 +447,6 @@ tabButtons["Rarity"] = buttonFrame:addButton()
 -- Highlight default tab
 setActiveTab("Implicit")
 
--- Debug log writer
-local function writeDebugLog(message)
-    local logFile = fs.open("debug_log.txt", "a")
-    logFile.writeLine(message)
-    logFile.close()
-end
-
 local updateButton = main:addButton()
     :setText("Update")
     :setSize(10, 1)
@@ -476,20 +503,20 @@ parallel.waitForAny(
                     local success, result = pcall(shouldKeep)
                     local score = getWeight()
                     local rarity = reader.getRarity()
-
-                    if success then
-                        updateScoreStats(score)
-                        updateRarityCounter(rarity)
-                        displayStatus(result and "KEEP" or "RECYCLE", score, rarity)
-                        if result then
-                            moveItem(reader, output, 1)
-                        else
-                            moveItem(reader, recycler, 1)
-                        end
-                    else
-                        displayStatus("ERROR", 0, "UNKNOWN")
-                        moveItem(reader, output, 1)
-                    end
+                    local success, result, score, rarity = pcall(shouldKeep)
+					if success then
+						updateScoreStats(score)
+						updateRarityCounter(rarity)
+						displayStatus(result and "KEEP" or "RECYCLE", score, rarity)
+						if result then
+							moveItem(reader, output, 1)
+						else
+							moveItem(reader, recycler, 1)
+						end
+					else
+						displayStatus("ERROR", 0, "SPECIAL")
+						moveItem(reader, output, 1)
+					end
                 end
             else
                 updateUI("Toggled Off", "--", "--")
